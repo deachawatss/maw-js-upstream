@@ -471,12 +471,21 @@ export class Tmux {
    */
   private async paneInputPending(target: string): Promise<boolean> {
     try {
-      const content = await this.capture(target, 5);
+      const content = await this.capture(target, 10);
       const lines = content.split("\n").filter(l => l.trim());
-      const last = (lines.at(-1) ?? "").replace(ANSI_RE, "").replace(/\r/g, "");
-      // Prompt marker followed by non-whitespace → user/command text still
-      // sitting on the input line, i.e. Enter has not submitted it yet.
-      return /[#$%>❯»]\s+\S/.test(last);
+
+      // Claude Code paste-mode: the TUI shows "[Pasted text #N ..." below the
+      // prompt while the paste is buffered but not yet submitted. The prompt
+      // marker may NOT be on the last visible line in this state.
+      if (lines.some(l => /\[Pasted text #?\d/.test(l))) return true;
+
+      // Check ALL visible lines (not just the last) — status bar / context
+      // indicator can appear below the prompt in Claude Code's TUI.
+      for (const raw of lines) {
+        const clean = raw.replace(ANSI_RE, "").replace(/\r/g, "");
+        if (/[#$%>❯»]\s+\S/.test(clean)) return true;
+      }
+      return false;
     } catch {
       return false;
     }

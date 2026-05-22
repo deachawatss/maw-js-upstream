@@ -237,6 +237,29 @@ export async function checkPaneIdle(
 }
 
 /**
+ * Wait for Claude Code's TUI to be fully initialized by polling for the
+ * `ctx:NN%` or `ctx:--` status bar indicator. Without this gate, messages
+ * sent during boot (direnv → --continue → fallback → TUI render, 10-30s)
+ * get pasted but never submitted because Enter keystrokes are lost.
+ */
+export async function waitForAgentReady(
+  target: string,
+  timeoutMs = 45000,
+  deps: { captureFn?: (target: string, lines: number, host?: string) => Promise<string> } = {},
+): Promise<boolean> {
+  const captureFn = deps.captureFn ?? capture;
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const content = await captureFn(target, 15);
+      if (/ctx:\d+%|ctx:--/.test(content)) return true;
+    } catch {}
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  return false;
+}
+
+/**
  * #1572 — bare oracle names are allowed only as a same-node convenience.
  *
  * `maw hey <oracle-window> "..."` now resolves locally first. If there is no
@@ -808,6 +831,31 @@ export async function cmdSend(
       const reason = inbox && !inbox.ok && inbox.reason ? `: ${inbox.reason}` : "";
       console.error(`\x1b[31merror\x1b[0m: --inbox requested but receiver inbox is unavailable for ${target}${reason}`);
       process.exit(1);
+    }
+    if (!force) {
+      const cmd = await new Tmux().getPaneCommand(target);
+      const isAgent = isAgentCommand(cmd);
+      if (!isAgent) {
+        if (logQueuedInbox(await writeReceiverInbox(target), target, `pane not running an agent (${cmd})`)) return;
+        console.error(`\x1b[31merror\x1b[0m: no active Claude session in ${target} (running: ${cmd})`);
+        console.error(`\x1b[33mhint\x1b[0m:  run \x1b[36mmaw wake ${query}\x1b[0m first, or use \x1b[36m--force\x1b[0m to send anyway`);
+        process.exit(1);
+      }
+      const ready = await waitForAgentReady(target);
+      if (!ready) {
+        console.warn(`\x1b[33mwarn\x1b[0m: ${target} did not show Claude Code status bar within timeout — proceeding anyway`);
+      }
+      let idleCheck = await checkPaneIdle(target);
+      if (!idleCheck.idle) {
+        await Bun.sleep(500);
+        idleCheck = await checkPaneIdle(target);
+        if (!idleCheck.idle) {
+          if (logQueuedInbox(await writeReceiverInbox(target), target, `pane not idle: ${idleCheck.lastInput.slice(0, 60)}`)) return;
+          console.error(`\x1b[31merror\x1b[0m: pane ${target} is not idle — user appears to be typing: "${idleCheck.lastInput.slice(0, 60)}"`);
+          console.error(`\x1b[33mhint\x1b[0m:  use \x1b[36m--force\x1b[0m to send anyway`);
+          process.exit(1);
+        }
+      }
     }
     await sendKeys(target, outboundMessage);
     // #1907 — verify the implicit Enter actually submitted. Default-on

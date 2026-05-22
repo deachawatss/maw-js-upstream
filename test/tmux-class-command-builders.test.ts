@@ -265,9 +265,9 @@ describe("Tmux command wrapper coverage", () => {
       "exitModeIfNeeded:s:main.0",
       "sendKeysLiteral:pending",
       "sendKeys:Enter",
-      "capture:5",
+      "capture:10",
       "sendKeys:Enter",
-      "capture:5",
+      "capture:10",
     ]);
   });
 
